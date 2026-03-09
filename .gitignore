@@ -1,0 +1,22 @@
+# Chrome Extension gitignore
+
+# Icon files (until created)
+*.png
+*.jpg
+*.jpeg
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Extension packaging
+*.crx
+*.pem
+*.zip
