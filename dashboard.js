@@ -2,232 +2,528 @@
 
 class MatchedBettingDashboard {
   constructor() {
-    this.oddsData = []; // Array of all odds combinations
-    this.refreshBtn = document.getElementById('refreshBtn');
-    this.statusDiv = document.getElementById('status');
-    this.tableBody = document.getElementById('tableBody');
-    this.filterOptionsDiv = document.getElementById('filterOptions');
-    this.toggleAllBtn = document.getElementById('toggleAllBtn');
+    this.oddsData = [];
+    this.statusDiv = document.getElementById("status");
+    this.tableBody = document.getElementById("tableBody");
+    this.filterOptionsDiv = document.getElementById("filterOptions");
+    this.toggleAllBtn = document.getElementById("toggleAllBtn");
     this.autoRefreshInterval = null;
     this.isCollapsed = false;
     this.COLLAPSE_THRESHOLD = 10;
-    this.enabledBookies = new Set(); // Track which bookies are enabled
-    this.availableBookies = new Set(); // Track which bookies have data
+    this.enabledBookies = new Set();
+    this.availableBookies = new Set();
+
     this.commissionValue = 0.08;
     this.commissionEnabled = true;
-    this.mode = 'bonus'; // 'bonus' or 'non-promo'
 
-    // Color threshold settings
+    this.backStakeValue = 50;
+    this.hideLayStake = false;
+    this.minOdds = 0;
+    this.maxOdds = 1000; // internal default when no explicit max is set
+
+    this.retentionValue = 80; // % of bonus you expect to realise
+    this.placesPaid = 3; // default places paid for place-refund offers
+
+    // Modes:
+    // - 'bonus-place'  : bonus back for placing (place-refund)
+    // - 'bonus-snr'    : bonus turnover (stake-not-returned)
+    // - 'non-promo'    : normal qualifying / non-offer bets
+    this.mode = "bonus-place";
+
     this.colorThresholds = {
+      // Bonus turnover (SNR) mode: thresholds compare against retention %
       bonus: {
         darkGreen: 90,
         lightGreen: 80,
         yellow: 75,
-        orange: 70
+        orange: 70,
+      },
+      // Bonus back for placing mode: thresholds compare against EV
+      bonusPlace: {
+        darkGreen: 9,
+        lightGreen: 7.5,
+        yellow: 6.5,
+        orange: 5,
       },
       nonPromo: {
         darkGreen: -5,
         lightGreen: -7.5,
         yellow: -10,
-        orange: -12.5
-      }
+        orange: -12.5,
+      },
     };
     this.eliteMode = false;
+
+    this.raceVenue = null;
+    this.betfairCommissionDisplay = "";
 
     this.init();
   }
 
   async init() {
-    // Commission UI refs
-    this.commissionInput = document.getElementById('commissionInput');
-    this.commissionCheckbox = document.getElementById('commissionEnabled');
+    this.commissionCheckbox = document.getElementById("commissionEnabled");
+    this.hideLayStakeCheckbox = document.getElementById("hideLayStake");
+    this.minOddsInput = document.getElementById("minOddsInput");
+    this.maxOddsInput = document.getElementById("maxOddsInput");
+    this.backStakeInput = document.getElementById("backStakeInput");
+    this.placesPaidInput = document.getElementById("placesPaidInput");
+    this.placesPaidWrapper = document.getElementById("placesPaidWrapper");
 
-    // Load saved commission settings (stored as whole-number percent 0-20)
     try {
-      const stored = await chrome.storage.local.get(['betfairCommission', 'betfairCommissionEnabled', 'bettingMode', 'colorThresholds', 'eliteMode']);
+      const stored = await chrome.storage.local.get([
+        "betfairCommission",
+        "betfairCommissionEnabled",
+        "hideLayStake",
+        "minOdds",
+        "maxOdds",
+        "backStakeValue",
+        "bettingMode",
+        "colorThresholds",
+        "eliteMode",
+        "placesPaid",
+      ]);
+
       let percent = 8;
       if (stored.betfairCommission != null) {
-        percent = Math.max(0, Math.min(20, Math.round(Number(stored.betfairCommission))));
+        percent = Math.max(
+          0,
+          Math.min(20, Math.round(Number(stored.betfairCommission))),
+        );
       }
       this.commissionValue = percent / 100;
-      if (this.commissionInput) this.commissionInput.value = percent;
+
       if (stored.betfairCommissionEnabled != null) {
         this.commissionEnabled = !!stored.betfairCommissionEnabled;
-        if (this.commissionCheckbox) this.commissionCheckbox.checked = this.commissionEnabled;
+        if (this.commissionCheckbox)
+          this.commissionCheckbox.checked = this.commissionEnabled;
       }
-      
-      // Load saved mode
+
+      if (stored.hideLayStake != null) {
+        this.hideLayStake = !!stored.hideLayStake;
+      }
+
+      if (stored.minOdds != null) {
+        const parsedMin = Number(stored.minOdds);
+        if (Number.isFinite(parsedMin) && parsedMin >= 0) {
+          this.minOdds = parsedMin;
+        }
+      }
+
+      if (stored.maxOdds != null) {
+        const parsedMax = Number(stored.maxOdds);
+        if (Number.isFinite(parsedMax) && parsedMax > 0) {
+          this.maxOdds = parsedMax;
+        }
+      }
+
+      if (stored.backStakeValue != null) {
+        const parsedStake = Number(stored.backStakeValue);
+        if (Number.isFinite(parsedStake) && parsedStake >= 0) {
+          this.backStakeValue = parsedStake;
+        }
+      }
+      if (this.backStakeInput) this.backStakeInput.value = this.backStakeValue;
+
       if (stored.bettingMode) {
         this.mode = stored.bettingMode;
       }
-      
-      // Load saved color thresholds
+
+      if (stored.placesPaid != null) {
+        const parsedPlaces = Number(stored.placesPaid);
+        if (Number.isFinite(parsedPlaces) && parsedPlaces > 0) {
+          this.placesPaid = Math.max(1, Math.min(10, Math.round(parsedPlaces)));
+        }
+      }
+      if (this.placesPaidInput) this.placesPaidInput.value = this.placesPaid;
+      if (this.hideLayStakeCheckbox)
+        this.hideLayStakeCheckbox.checked = this.hideLayStake;
+      if (this.minOddsInput)
+        this.minOddsInput.value = String(this.minOdds ?? 0);
+      if (this.maxOddsInput) {
+        if (
+          stored.maxOdds != null &&
+          Number.isFinite(this.maxOdds) &&
+          this.maxOdds > 0 &&
+          this.maxOdds !== 1000
+        ) {
+          // Only prefill if user explicitly set a non-default max
+          this.maxOddsInput.value = String(this.maxOdds);
+        } else {
+          // No explicit max: keep UI blank
+          this.maxOddsInput.value = "";
+        }
+      }
+
       if (stored.colorThresholds) {
         this.colorThresholds = stored.colorThresholds;
+
+        // Migration: if bonus thresholds look like EV values (e.g. 9, 7.5, 6.5, 5),
+        // move them to bonusPlace and restore bonus to retention % defaults.
+        if (
+          this.colorThresholds.bonus &&
+          !this.colorThresholds.bonusPlace &&
+          this.colorThresholds.bonus.darkGreen <= 20
+        ) {
+          this.colorThresholds.bonusPlace = { ...this.colorThresholds.bonus };
+          this.colorThresholds.bonus = {
+            darkGreen: 90,
+            lightGreen: 80,
+            yellow: 75,
+            orange: 70,
+          };
+
+          chrome.storage.local
+            .set({ colorThresholds: this.colorThresholds })
+            .catch(() => {});
+        }
+
+        // Ensure bonusPlace thresholds always exist (for older configs).
+        if (!this.colorThresholds.bonusPlace) {
+          this.colorThresholds.bonusPlace = {
+            darkGreen: 9,
+            lightGreen: 7.5,
+            yellow: 6.5,
+            orange: 5,
+          };
+        }
       }
-      // Load elite mode (when on, non-promo uses -1, -2.7, -5.6, -8.3)
+
       if (stored.eliteMode != null) {
         this.eliteMode = !!stored.eliteMode;
         if (this.eliteMode) {
-          this.colorThresholds.nonPromo = { darkGreen: -1, lightGreen: -2.7, yellow: -5.6, orange: -8.3 };
+          this.colorThresholds.nonPromo = {
+            darkGreen: -1,
+            lightGreen: -2.7,
+            yellow: -5.6,
+            orange: -8.3,
+          };
         }
       }
     } catch (e) {
-      console.warn('[Dashboard] Could not load settings:', e);
+      console.warn("[Dashboard] Could not load settings:", e);
     }
 
-    // Mode select UI ref
-    this.modeSelect = document.getElementById('modeSelect');
+    this.modeSelect = document.getElementById("modeSelect");
     if (this.modeSelect) {
       this.modeSelect.value = this.mode;
-      this.modeSelect.addEventListener('change', () => this.onModeChange());
+      this.modeSelect.addEventListener("change", () => this.onModeChange());
     }
 
-    // Bind event listeners
-    this.refreshBtn.addEventListener('click', () => this.fetchOdds());
-    this.toggleAllBtn.addEventListener('click', () => this.toggleAllBookies());
+    this.toggleAllBtn.addEventListener("click", () => this.toggleAllBookies());
 
-    if (this.commissionInput) {
-      this.commissionInput.addEventListener('input', () => this.onCommissionChange());
-      this.commissionInput.addEventListener('change', () => this.onCommissionChange());
-    }
+    // No commission input field anymore; commission comes from Betfair (or last stored) only.
     if (this.commissionCheckbox) {
-      this.commissionCheckbox.addEventListener('change', () => this.onCommissionChange());
+      this.commissionCheckbox.addEventListener("change", () =>
+        this.onPricingInputsChange(),
+      );
+    }
+    if (this.backStakeInput) {
+      this.backStakeInput.addEventListener("input", () =>
+        this.onBackStakeInputChange(false),
+      );
+      this.backStakeInput.addEventListener("change", () =>
+        this.onBackStakeInputChange(true),
+      );
     }
 
-    // Settings modal UI refs
-    this.settingsBtn = document.getElementById('settingsBtn');
-    this.settingsModal = document.getElementById('settingsModal');
-    this.closeModalBtn = document.querySelector('.close');
-    this.saveSettingsBtn = document.getElementById('saveSettingsBtn');
-    this.resetDefaultsBtn = document.getElementById('resetDefaultsBtn');
-    this.eliteModeCheckbox = document.getElementById('eliteModeCheckbox');
+    if (this.placesPaidInput) {
+      this.placesPaidInput.addEventListener("change", () =>
+        this.onPricingInputsChange(),
+      );
+    }
 
-    // Bind modal event listeners
+    if (this.hideLayStakeCheckbox) {
+      this.hideLayStakeCheckbox.addEventListener("change", () =>
+        this.onHideLayStakeChange(),
+      );
+    }
+
+    if (this.minOddsInput || this.maxOddsInput) {
+      this.minOddsInput?.addEventListener("change", () =>
+        this.onOddsRangeChange(),
+      );
+      this.maxOddsInput?.addEventListener("change", () =>
+        this.onOddsRangeChange(),
+      );
+    }
+
+    this.settingsBtn = document.getElementById("settingsBtn");
+    this.settingsModal = document.getElementById("settingsModal");
+    this.closeModalBtn = document.querySelector(".close");
+    this.saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    this.resetDefaultsBtn = document.getElementById("resetDefaultsBtn");
+    this.eliteModeCheckbox = document.getElementById("eliteModeCheckbox");
+
     if (this.settingsBtn) {
-      this.settingsBtn.addEventListener('click', () => this.openSettingsModal());
+      this.settingsBtn.addEventListener("click", () =>
+        this.openSettingsModal(),
+      );
     }
     if (this.closeModalBtn) {
-      this.closeModalBtn.addEventListener('click', () => this.closeSettingsModal());
+      this.closeModalBtn.addEventListener("click", () =>
+        this.closeSettingsModal(),
+      );
     }
     if (this.saveSettingsBtn) {
-      this.saveSettingsBtn.addEventListener('click', () => this.saveColorSettings());
+      this.saveSettingsBtn.addEventListener("click", () =>
+        this.saveColorSettings(),
+      );
     }
     if (this.resetDefaultsBtn) {
-      this.resetDefaultsBtn.addEventListener('click', () => this.resetToDefaults());
+      this.resetDefaultsBtn.addEventListener("click", () =>
+        this.resetToDefaults(),
+      );
     }
     if (this.eliteModeCheckbox) {
-      this.eliteModeCheckbox.addEventListener('change', () => this.onEliteModeToggle());
+      this.eliteModeCheckbox.addEventListener("change", () =>
+        this.onEliteModeToggle(),
+      );
     }
-    // Close modal when clicking outside
-    window.addEventListener('click', (e) => {
+
+    window.addEventListener("click", (e) => {
       if (e.target === this.settingsModal) {
         this.closeSettingsModal();
       }
     });
 
-    // Auto-fetch on load
-    this.fetchOdds();
+    this.updatePlacesPaidVisibility();
 
-    // Start auto-refresh every 1 second
+    this.fetchOdds();
     this.startAutoRefresh();
   }
 
-  onCommissionChange() {
-    const raw = parseFloat(this.commissionInput.value);
-    const percent = isNaN(raw) ? 8 : Math.max(0, Math.min(20, Math.round(raw)));
-    this.commissionInput.value = percent;
-    this.commissionValue = percent / 100;
-    this.commissionEnabled = this.commissionCheckbox.checked;
-    chrome.storage.local.set({
-      betfairCommission: percent,
-      betfairCommissionEnabled: this.commissionEnabled
-    }).catch(() => {});
+  onPricingInputsChange() {
+    this.commissionEnabled = !!this.commissionCheckbox?.checked;
+
+    const rawPlaces = parseFloat(this.placesPaidInput?.value);
+    this.placesPaid =
+      Number.isFinite(rawPlaces) && rawPlaces > 0
+        ? Math.max(1, Math.min(10, Math.round(rawPlaces)))
+        : 3;
+    if (this.placesPaidInput) this.placesPaidInput.value = this.placesPaid;
+
+    chrome.storage.local
+      .set({
+        betfairCommissionEnabled: this.commissionEnabled,
+        backStakeValue: this.backStakeValue,
+        placesPaid: this.placesPaid,
+      })
+      .catch(() => {});
+
+    this.renderTable();
+  }
+
+  onHideLayStakeChange() {
+    this.hideLayStake = !!this.hideLayStakeCheckbox?.checked;
+    chrome.storage.local
+      .set({
+        hideLayStake: this.hideLayStake,
+      })
+      .catch(() => {});
+    this.renderTable();
+  }
+
+  onOddsRangeChange() {
+    if (this.minOddsInput) {
+      const rawMin = this.minOddsInput.value;
+      const parsedMin = parseFloat(rawMin);
+      this.minOdds =
+        Number.isFinite(parsedMin) && parsedMin >= 0 ? parsedMin : 0;
+      this.minOddsInput.value = String(this.minOdds);
+    }
+
+    if (this.maxOddsInput) {
+      const rawMax = this.maxOddsInput.value;
+      const parsedMax = parseFloat(rawMax);
+      if (rawMax === "" || !Number.isFinite(parsedMax) || parsedMax <= 0) {
+        // No explicit max: use internal default but keep the UI empty
+        this.maxOdds = 1000;
+        this.maxOddsInput.value = "";
+      } else {
+        this.maxOdds = parsedMax;
+        this.maxOddsInput.value = String(parsedMax);
+      }
+    }
+
+    chrome.storage.local
+      .set({
+        minOdds: this.minOdds,
+        maxOdds:
+          this.maxOddsInput && this.maxOddsInput.value === ""
+            ? null
+            : this.maxOdds,
+      })
+      .catch(() => {});
+
+    this.renderTable();
+  }
+
+  onBackStakeInputChange(normalize = false) {
+    if (!this.backStakeInput) return;
+
+    const raw = this.backStakeInput.value;
+    const parsed = parseFloat(raw);
+
+    if (raw === "" || !Number.isFinite(parsed) || parsed < 0) {
+      if (normalize) {
+        // On blur, snap back to default stake when empty/invalid
+        this.backStakeValue = 50;
+        this.backStakeInput.value = "50";
+      } else {
+        // While typing, treat empty as 0 stake and hide Lay $
+        this.backStakeValue = 0;
+      }
+    } else {
+      this.backStakeValue = parsed;
+      if (normalize) {
+        this.backStakeInput.value = String(parsed);
+      }
+    }
+
+    chrome.storage.local
+      .set({
+        backStakeValue: this.backStakeValue,
+      })
+      .catch(() => {});
+
     this.renderTable();
   }
 
   onModeChange() {
     this.mode = this.modeSelect.value;
     chrome.storage.local.set({ bettingMode: this.mode }).catch(() => {});
+    this.updatePlacesPaidVisibility();
     this.renderTable();
   }
 
-  openSettingsModal() {
-    // Populate bonus inputs
-    document.getElementById('bonus-dark-green').value = this.colorThresholds.bonus.darkGreen;
-    document.getElementById('bonus-light-green').value = this.colorThresholds.bonus.lightGreen;
-    document.getElementById('bonus-yellow').value = this.colorThresholds.bonus.yellow;
-    document.getElementById('bonus-orange').value = this.colorThresholds.bonus.orange;
+  updatePlacesPaidVisibility() {
+    if (!this.placesPaidWrapper) return;
+    this.placesPaidWrapper.style.display =
+      this.mode === "bonus-place" ? "" : "none";
+  }
 
-    // Elite mode: sync checkbox and non-promo inputs
-    const npDark = document.getElementById('nonpromo-dark-green');
-    const npLight = document.getElementById('nonpromo-light-green');
-    const npYellow = document.getElementById('nonpromo-yellow');
-    const npOrange = document.getElementById('nonpromo-orange');
+  openSettingsModal() {
+    document.getElementById("bonus-dark-green").value =
+      this.colorThresholds.bonus.darkGreen;
+    document.getElementById("bonus-light-green").value =
+      this.colorThresholds.bonus.lightGreen;
+    document.getElementById("bonus-yellow").value =
+      this.colorThresholds.bonus.yellow;
+    document.getElementById("bonus-orange").value =
+      this.colorThresholds.bonus.orange;
+
+    const npDark = document.getElementById("nonpromo-dark-green");
+    const npLight = document.getElementById("nonpromo-light-green");
+    const npYellow = document.getElementById("nonpromo-yellow");
+    const npOrange = document.getElementById("nonpromo-orange");
+
     if (this.eliteModeCheckbox) this.eliteModeCheckbox.checked = this.eliteMode;
+
     if (this.eliteMode) {
       npDark.value = -1;
       npLight.value = -2.7;
       npYellow.value = -5.6;
       npOrange.value = -8.3;
-      npDark.disabled = npLight.disabled = npYellow.disabled = npOrange.disabled = true;
+      npDark.disabled =
+        npLight.disabled =
+        npYellow.disabled =
+        npOrange.disabled =
+          true;
     } else {
       npDark.value = this.colorThresholds.nonPromo.darkGreen;
       npLight.value = this.colorThresholds.nonPromo.lightGreen;
       npYellow.value = this.colorThresholds.nonPromo.yellow;
       npOrange.value = this.colorThresholds.nonPromo.orange;
-      npDark.disabled = npLight.disabled = npYellow.disabled = npOrange.disabled = false;
+      npDark.disabled =
+        npLight.disabled =
+        npYellow.disabled =
+        npOrange.disabled =
+          false;
     }
 
-    this.settingsModal.style.display = 'block';
+    this.settingsModal.style.display = "block";
   }
 
   onEliteModeToggle() {
     const checked = this.eliteModeCheckbox && this.eliteModeCheckbox.checked;
-    const npDark = document.getElementById('nonpromo-dark-green');
-    const npLight = document.getElementById('nonpromo-light-green');
-    const npYellow = document.getElementById('nonpromo-yellow');
-    const npOrange = document.getElementById('nonpromo-orange');
+    const npDark = document.getElementById("nonpromo-dark-green");
+    const npLight = document.getElementById("nonpromo-light-green");
+    const npYellow = document.getElementById("nonpromo-yellow");
+    const npOrange = document.getElementById("nonpromo-orange");
+
     if (checked) {
       npDark.value = -1;
       npLight.value = -2.7;
       npYellow.value = -5.6;
       npOrange.value = -8.3;
-      npDark.disabled = npLight.disabled = npYellow.disabled = npOrange.disabled = true;
+      npDark.disabled =
+        npLight.disabled =
+        npYellow.disabled =
+        npOrange.disabled =
+          true;
     } else {
       npDark.value = this.colorThresholds.nonPromo.darkGreen;
       npLight.value = this.colorThresholds.nonPromo.lightGreen;
       npYellow.value = this.colorThresholds.nonPromo.yellow;
       npOrange.value = this.colorThresholds.nonPromo.orange;
-      npDark.disabled = npLight.disabled = npYellow.disabled = npOrange.disabled = false;
+      npDark.disabled =
+        npLight.disabled =
+        npYellow.disabled =
+        npOrange.disabled =
+          false;
     }
   }
 
   closeSettingsModal() {
-    this.settingsModal.style.display = 'none';
+    this.settingsModal.style.display = "none";
   }
 
   saveColorSettings() {
     const eliteOn = this.eliteModeCheckbox && this.eliteModeCheckbox.checked;
     this.eliteMode = eliteOn;
+
     this.colorThresholds = {
       bonus: {
-        darkGreen: parseFloat(document.getElementById('bonus-dark-green').value) || 90,
-        lightGreen: parseFloat(document.getElementById('bonus-light-green').value) || 80,
-        yellow: parseFloat(document.getElementById('bonus-yellow').value) || 75,
-        orange: parseFloat(document.getElementById('bonus-orange').value) || 70
+        darkGreen:
+          parseFloat(document.getElementById("bonus-dark-green").value) || 90,
+        lightGreen:
+          parseFloat(document.getElementById("bonus-light-green").value) || 80,
+        yellow: parseFloat(document.getElementById("bonus-yellow").value) || 75,
+        orange: parseFloat(document.getElementById("bonus-orange").value) || 70,
+      },
+      // Bonus-place EV thresholds are not user-editable; keep existing or defaults.
+      bonusPlace: this.colorThresholds.bonusPlace || {
+        darkGreen: 9,
+        lightGreen: 7.5,
+        yellow: 6.5,
+        orange: 5,
       },
       nonPromo: eliteOn
         ? { darkGreen: -1, lightGreen: -2.7, yellow: -5.6, orange: -8.3 }
         : {
-            darkGreen: parseFloat(document.getElementById('nonpromo-dark-green').value) || -5,
-            lightGreen: parseFloat(document.getElementById('nonpromo-light-green').value) || -7.5,
-            yellow: parseFloat(document.getElementById('nonpromo-yellow').value) || -10,
-            orange: parseFloat(document.getElementById('nonpromo-orange').value) || -12.5
-          }
+            darkGreen:
+              parseFloat(
+                document.getElementById("nonpromo-dark-green").value,
+              ) || -5,
+            lightGreen:
+              parseFloat(
+                document.getElementById("nonpromo-light-green").value,
+              ) || -7.5,
+            yellow:
+              parseFloat(document.getElementById("nonpromo-yellow").value) ||
+              -10,
+            orange:
+              parseFloat(document.getElementById("nonpromo-orange").value) ||
+              -12.5,
+          },
     };
 
-    chrome.storage.local.set({ colorThresholds: this.colorThresholds, eliteMode: this.eliteMode }).catch(() => {});
+    chrome.storage.local
+      .set({
+        colorThresholds: this.colorThresholds,
+        eliteMode: this.eliteMode,
+      })
+      .catch(() => {});
 
     this.renderTable();
     this.closeSettingsModal();
@@ -237,202 +533,244 @@ class MatchedBettingDashboard {
     this.eliteMode = false;
     this.colorThresholds = {
       bonus: { darkGreen: 90, lightGreen: 80, yellow: 75, orange: 70 },
-      nonPromo: { darkGreen: -5, lightGreen: -7.5, yellow: -10, orange: -12.5 }
+      bonusPlace: { darkGreen: 9, lightGreen: 7.5, yellow: 6.5, orange: 5 },
+      nonPromo: { darkGreen: -5, lightGreen: -7.5, yellow: -10, orange: -12.5 },
     };
-    chrome.storage.local.set({ colorThresholds: this.colorThresholds, eliteMode: false }).catch(() => {});
 
-    // Refresh modal with defaults (keeps modal open)
-    document.getElementById('bonus-dark-green').value = this.colorThresholds.bonus.darkGreen;
-    document.getElementById('bonus-light-green').value = this.colorThresholds.bonus.lightGreen;
-    document.getElementById('bonus-yellow').value = this.colorThresholds.bonus.yellow;
-    document.getElementById('bonus-orange').value = this.colorThresholds.bonus.orange;
+    chrome.storage.local
+      .set({
+        colorThresholds: this.colorThresholds,
+        eliteMode: false,
+      })
+      .catch(() => {});
+
+    document.getElementById("bonus-dark-green").value =
+      this.colorThresholds.bonus.darkGreen;
+    document.getElementById("bonus-light-green").value =
+      this.colorThresholds.bonus.lightGreen;
+    document.getElementById("bonus-yellow").value =
+      this.colorThresholds.bonus.yellow;
+    document.getElementById("bonus-orange").value =
+      this.colorThresholds.bonus.orange;
+
     if (this.eliteModeCheckbox) this.eliteModeCheckbox.checked = false;
-    const npDark = document.getElementById('nonpromo-dark-green');
-    const npLight = document.getElementById('nonpromo-light-green');
-    const npYellow = document.getElementById('nonpromo-yellow');
-    const npOrange = document.getElementById('nonpromo-orange');
+
+    const npDark = document.getElementById("nonpromo-dark-green");
+    const npLight = document.getElementById("nonpromo-light-green");
+    const npYellow = document.getElementById("nonpromo-yellow");
+    const npOrange = document.getElementById("nonpromo-orange");
+
     npDark.value = this.colorThresholds.nonPromo.darkGreen;
     npLight.value = this.colorThresholds.nonPromo.lightGreen;
     npYellow.value = this.colorThresholds.nonPromo.yellow;
     npOrange.value = this.colorThresholds.nonPromo.orange;
-    npDark.disabled = npLight.disabled = npYellow.disabled = npOrange.disabled = false;
+    npDark.disabled =
+      npLight.disabled =
+      npYellow.disabled =
+      npOrange.disabled =
+        false;
   }
 
   startAutoRefresh() {
-    // Clear any existing interval
     if (this.autoRefreshInterval) {
       clearInterval(this.autoRefreshInterval);
     }
 
-    // Refresh every 1 second
     this.autoRefreshInterval = setInterval(() => {
-      this.fetchOdds(true); // silent refresh (no status updates)
+      this.fetchOdds(true);
     }, 1000);
 
-    console.log('[Dashboard] Auto-refresh started (1s interval)');
+    console.log("[Dashboard] Auto-refresh started (1s interval)");
   }
 
   stopAutoRefresh() {
     if (this.autoRefreshInterval) {
       clearInterval(this.autoRefreshInterval);
       this.autoRefreshInterval = null;
-      console.log('[Dashboard] Auto-refresh stopped');
+      console.log("[Dashboard] Auto-refresh stopped");
     }
   }
 
-  // Returns the bookie script file for a URL, or null if not a supported bookmaker
+  getBookieLogoHtml(bookieName) {
+    if (!bookieName) return null;
+
+    const logoFiles = {
+      Betfair: "betfair.png",
+      TAB: "tab.png",
+      bet365: "bet365.png",
+      Sportsbet: "sportsbet.png",
+      Ladbrokes: "ladbrokes.png",
+      Neds: "neds.png",
+      PointsBet: "pointsbet.png",
+      Betr: "betr.png",
+      Unibet: "unibet.png",
+      BetDeluxe: "betdeluxe.png",
+    };
+
+    const fileName = logoFiles[bookieName];
+    if (!fileName) return null;
+
+    const src = `assets/bookies/${fileName}`;
+    return `<img src="${src}" alt="${bookieName}" class="bookie-logo" />`;
+  }
+
   getBookieScriptFile(url) {
     if (!url) return null;
-    if (url.includes('betfair.com.au')) return 'bookies/betfair.js';
-    if (url.includes('tab.com.au')) return 'bookies/tab.js';
-    if (url.includes('bet365.com')) return 'bookies/bet365.js';
-    if (url.includes('sportsbet.com.au')) return 'bookies/sportsbet.js';
-    if (url.includes('ladbrokes.com.au')) return 'bookies/ladbrokes.js';
-    if (url.includes('neds.com.au')) return 'bookies/neds.js';
-    if (url.includes('pointsbet.com')) return 'bookies/pointsbet.js';
-    if (url.includes('betr.com.au')) return 'bookies/betr.js';
-    if (url.includes('unibet.com')) return 'bookies/unibet.js';
-    if (url.includes('betdeluxe.com.au')) return 'bookies/betdeluxe.js';
+    if (url.includes("betfair.com.au")) return "bookies/betfair.js";
+    if (url.includes("tab.com.au")) return "bookies/tab.js";
+    if (url.includes("bet365.com")) return "bookies/bet365.js";
+    if (url.includes("sportsbet.com.au")) return "bookies/sportsbet.js";
+    if (url.includes("ladbrokes.com.au")) return "bookies/ladbrokes.js";
+    if (url.includes("neds.com.au")) return "bookies/neds.js";
+    if (url.includes("pointsbet.com")) return "bookies/pointsbet.js";
+    if (url.includes("betr.com.au")) return "bookies/betr.js";
+    if (url.includes("unibet.com")) return "bookies/unibet.js";
+    if (url.includes("betdeluxe.com.au")) return "bookies/betdeluxe.js";
     return null;
   }
 
   async fetchOdds(silent = false) {
     if (!silent) {
-      this.setStatus('🔄 Scanning open tabs...', 'loading');
-      this.refreshBtn.disabled = true;
+      this.setStatus("🔄 Scanning open tabs...", "loading");
     }
-    
-    // Clear existing data
+
     this.oddsData = [];
+    this.raceVenue = null;
+    this.betfairCommissionDisplay = "";
+    this.availableBookies.clear();
 
     try {
-      // Query all tabs
       const tabs = await chrome.tabs.query({});
       if (!silent) {
-        this.setStatus(`📡 Found ${tabs.length} tabs, requesting odds data...`, 'loading');
+        this.setStatus(
+          `📡 Found ${tabs.length} tabs, requesting odds data...`,
+          "loading",
+        );
       }
 
-      // PHASE 1: Get Betfair data first (source of truth)
-      const betfairTabs = tabs.filter(tab => tab.url && tab.url.includes('betfair.com.au'));
+      const betfairTabs = tabs.filter(
+        (tab) => tab.url && tab.url.includes("betfair.com.au"),
+      );
       let betfairHorseNames = [];
-      
+
       if (betfairTabs.length > 0) {
         if (!silent) {
-          this.setStatus(`🏇 Loading Betfair data (source of truth)...`, 'loading');
+          this.setStatus(
+            "🏇 Loading Betfair data (source of truth)...",
+            "loading",
+          );
         }
-        
+
         const betfairResults = await Promise.allSettled(
-          betfairTabs.map(tab => this.requestOddsFromTab(tab))
+          betfairTabs.map((tab) => this.requestOddsFromTab(tab)),
         );
-        
-        betfairResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
+
+        betfairResults.forEach((result) => {
+          if (result.status === "fulfilled" && result.value) {
             const { data, tabInfo } = result.value;
             if (data && data.length > 0) {
               this.mergeOddsData(data, tabInfo);
-              // Collect Betfair horse names
-              data.forEach(horse => {
-                if (horse.name) {
-                  betfairHorseNames.push(horse.name);
-                }
+              data.forEach((horse) => {
+                if (horse.name) betfairHorseNames.push(horse.name);
               });
             }
           }
         });
-        
-        console.log(`[Dashboard] Betfair names (source of truth):`, betfairHorseNames);
       }
 
-      // PHASE 2: Get bookmaker data (only from tabs that are supported bookmaker sites)
-      const bookieTabs = tabs.filter(tab => tab.url && !tab.url.includes('betfair.com.au') && this.getBookieScriptFile(tab.url));
-      
+      const bookieTabs = tabs.filter(
+        (tab) =>
+          tab.url &&
+          !tab.url.includes("betfair.com.au") &&
+          this.getBookieScriptFile(tab.url),
+      );
+
       if (bookieTabs.length > 0) {
         if (!silent) {
-          this.setStatus(`📊 Searching bookmakers for Betfair horses...`, 'loading');
+          this.setStatus(
+            "📊 Searching bookmakers for Betfair horses...",
+            "loading",
+          );
         }
-        
+
         const bookieResults = await Promise.allSettled(
-          bookieTabs.map(tab => this.requestOddsFromTab(tab, betfairHorseNames))
+          bookieTabs.map((tab) =>
+            this.requestOddsFromTab(tab, betfairHorseNames),
+          ),
         );
-        
-        let successCount = betfairTabs.length > 0 ? betfairTabs.length : 0;
-        bookieResults.forEach(result => {
-          if (result.status === 'fulfilled' && result.value) {
+
+        bookieResults.forEach((result) => {
+          if (result.status === "fulfilled" && result.value) {
             const { data, tabInfo } = result.value;
             if (data && data.length > 0) {
               this.mergeOddsData(data, tabInfo);
-              successCount++;
             }
           }
         });
       }
 
-      // Update bookie filters
       this.updateBookieFilters();
 
-      // Update UI
       if (this.oddsData.length === 0) {
         if (!silent) {
-          this.setStatus('⚠️ No odds data found. Make sure you have betting tabs open (Betfair, TAB, or bet365).', 'warning');
+          this.setStatus(
+            "⚠️ No odds data found. Make sure you have betting tabs open (Betfair, TAB, bet365, Sportsbet, Ladbrokes, Neds, PointsBet, Betr, Unibet, BetDeluxe).",
+            "warning",
+          );
         }
         this.renderEmptyState();
       } else {
-        const totalSuccess = betfairTabs.length + bookieTabs.length;
+        this.updateRaceInfo();
+        this.updateCommissionInfo();
         if (!silent) {
-          this.setStatus(`Successfully loaded odds from ${totalSuccess} tab(s). Found ${this.oddsData.length} combination(s). Auto-refreshing every 1s.`, 'success');
+          this.setStatus("", "info");
         }
         this.renderTable();
       }
     } catch (error) {
-      console.error('Error fetching odds:', error);
+      console.error("Error fetching odds:", error);
       if (!silent) {
-        this.setStatus('❌ Error fetching odds. Check console for details.', 'error');
+        this.setStatus(
+          "❌ Error fetching odds. Check console for details.",
+          "error",
+        );
       }
     } finally {
-      if (!silent) {
-        this.refreshBtn.disabled = false;
-      }
+      // no-op; refresh button removed
     }
   }
 
   async requestOddsFromTab(tab, targetHorseNames = []) {
     return new Promise(async (resolve) => {
-      // Set timeout for unresponsive tabs
       const timeout = setTimeout(() => {
         resolve(null);
       }, 2000);
 
-      // Try sending message to existing content script
-      const message = { 
-        action: 'request_odds',
-        targetHorseNames: targetHorseNames // Pass Betfair names if available
+      const message = {
+        action: "request_odds",
+        targetHorseNames: targetHorseNames,
       };
-      
+
       chrome.tabs.sendMessage(tab.id, message, async (response) => {
         clearTimeout(timeout);
-        
+
         if (chrome.runtime.lastError) {
           const scriptFile = this.getBookieScriptFile(tab.url);
-          if (scriptFile) {
-            console.log(`[Dashboard] Content script not found in tab ${tab.id}, injecting ${scriptFile}...`);
-          }
+
           try {
             if (scriptFile) {
-              // Inject the content script
               await chrome.scripting.executeScript({
                 target: { tabId: tab.id },
-                files: [scriptFile]
+                files: [scriptFile],
               });
 
-              // Wait a bit for the script to initialize
-              await new Promise(r => setTimeout(r, 500));
+              await new Promise((r) => setTimeout(r, 500));
 
-              // Try again with target names
-              const retryMessage = { 
-                action: 'request_odds',
-                targetHorseNames: targetHorseNames
+              const retryMessage = {
+                action: "request_odds",
+                targetHorseNames: targetHorseNames,
               };
-              
+
               chrome.tabs.sendMessage(tab.id, retryMessage, (response2) => {
                 if (chrome.runtime.lastError) {
                   resolve(null);
@@ -445,8 +783,8 @@ class MatchedBettingDashboard {
                     tabInfo: {
                       url: tab.url,
                       title: tab.title,
-                      tabId: tab.id
-                    }
+                      tabId: tab.id,
+                    },
                   });
                 } else {
                   resolve(null);
@@ -456,7 +794,10 @@ class MatchedBettingDashboard {
               resolve(null);
             }
           } catch (error) {
-            console.error(`[Dashboard] Failed to inject script into tab ${tab.id}:`, error);
+            console.error(
+              `[Dashboard] Failed to inject script into tab ${tab.id}:`,
+              error,
+            );
             resolve(null);
           }
           return;
@@ -468,8 +809,8 @@ class MatchedBettingDashboard {
             tabInfo: {
               url: tab.url,
               title: tab.title,
-              tabId: tab.id
-            }
+              tabId: tab.id,
+            },
           });
         } else {
           resolve(null);
@@ -479,103 +820,331 @@ class MatchedBettingDashboard {
   }
 
   mergeOddsData(data, tabInfo) {
-    // Store all horse data with their site information
-    data.forEach(horse => {
+    data.forEach((horse) => {
+      if (!this.raceVenue && horse.site === "Betfair" && horse.raceVenue) {
+        this.raceVenue = horse.raceVenue;
+      }
+
+      if (
+        !this.betfairCommissionDisplay &&
+        horse.site === "Betfair" &&
+        horse.commissionDisplay
+      ) {
+        this.betfairCommissionDisplay = horse.commissionDisplay;
+        if (horse.commissionRate != null) {
+          this.commissionValue = horse.commissionRate;
+          const percent = Math.round(horse.commissionRate * 100);
+          // Persist latest scraped commission so we have a default next load
+          chrome.storage.local
+            .set({ betfairCommission: percent })
+            .catch(() => {});
+          // Do not override the user's "Apply Betfair commission" checkbox
+        }
+      }
+
       this.oddsData.push({
         name: horse.name,
         normalizedName: this.normalizeHorseName(horse.name),
         backOdds: horse.backOdds,
         layOdds: horse.layOdds,
+        liquidity: horse.liquidity ?? null,
         site: horse.site,
         source: `${horse.site}: ${tabInfo.url}`,
-        tabId: tabInfo.tabId, // Store tab ID for click-to-switch
-        tabUrl: tabInfo.url
+        tabId: tabInfo.tabId,
+        tabUrl: tabInfo.url,
       });
-      
-      // Track available bookmakers (exclude Betfair from filter)
-      if (horse.site !== 'Betfair') {
+
+      if (horse.site !== "Betfair") {
         this.availableBookies.add(horse.site);
       }
     });
   }
 
-  // Normalize horse names for matching (case-insensitive, trim whitespace)
-  normalizeHorseName(name) {
-    return name.trim().toLowerCase();
+  updateRaceInfo() {
+    const el = document.getElementById("raceInfo");
+    if (!el) return;
+
+    if (this.raceVenue) {
+      el.textContent = this.raceVenue;
+    } else {
+      el.textContent = "";
+    }
   }
 
-  // Create all possible combinations of Betfair + Bookies for each horse
+  updateCommissionInfo() {
+    const el = document.getElementById("commissionInfo");
+    if (!el) return;
+
+    if (this.betfairCommissionDisplay) {
+      el.textContent = this.betfairCommissionDisplay;
+    } else {
+      // Scraping failed or no explicit commission text found; show sensible fallback.
+      el.textContent = "Commission not found, defaulting to 8%";
+    }
+  }
+
+  normalizeHorseName(name) {
+    if (!name) return "";
+
+    return String(name)
+      .toLowerCase()
+      .replace(/^\d+\s*[.\-]?\s*/, "") // leading runner number
+      .replace(/\[[^\]]*\]/g, " ") // [..]
+      .replace(/\([^)]*\)/g, " ") // (..)
+      .replace(/\b(nz|aus|gb|ire|fr|usa|saf|jpn)\b/g, " ")
+      .replace(/['’`]/g, "") // apostrophes
+      .replace(/[^a-z0-9]+/g, " ") // punctuation to space
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  getCompactHorseKey(name) {
+    return this.normalizeHorseName(name).replace(/\s+/g, "");
+  }
+
+  getMatchedHorseGroupKey(entry, horseGroups) {
+    const exactKey = entry.normalizedName;
+    if (horseGroups.has(exactKey)) {
+      return exactKey;
+    }
+
+    const compactKey = this.getCompactHorseKey(entry.name);
+
+    for (const existingKey of horseGroups.keys()) {
+      const existingCompact = existingKey.replace(/\s+/g, "");
+
+      if (compactKey === existingCompact) {
+        return existingKey;
+      }
+
+      if (compactKey && existingCompact) {
+        if (
+          compactKey.includes(existingCompact) ||
+          existingCompact.includes(compactKey)
+        ) {
+          return existingKey;
+        }
+      }
+    }
+
+    return exactKey;
+  }
+
+  parseCurrency(value) {
+    if (value == null) return null;
+    if (typeof value === "number") return value;
+    const parsed = parseFloat(String(value).replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  calculateRetention(betfairLay, bookieBack) {
+    if (!betfairLay || !bookieBack) return null;
+
+    if (this.commissionEnabled) {
+      const denominator = betfairLay - this.commissionValue;
+      if (denominator <= 0) return null;
+      return (
+        (((bookieBack - 1) * (1 - this.commissionValue)) / denominator) * 100
+      );
+    }
+
+    return ((bookieBack - 1) / betfairLay) * 100;
+  }
+
+  // Mode dispatch helpers
+
+  getModeCalculations(betfairLay, bookieBack, numRunners) {
+    if (!betfairLay || !bookieBack) {
+      return { layStake: null, xr: null, ev: null, retention: null };
+    }
+
+    const backStake = this.backStakeValue;
+    const commissionEnabled = this.commissionEnabled;
+    const commissionValue = this.commissionValue;
+
+    if (this.mode === "bonus-place") {
+      const { calculateBonusBackPlaceEv } = window.DashboardModes.bonusPlace;
+      const result = calculateBonusBackPlaceEv({
+        betfairLay,
+        bookieBack,
+        backStake,
+        commissionEnabled,
+        commissionValue,
+        placesPaid: this.placesPaid,
+        numRunners,
+        retentionValue: this.retentionValue,
+      });
+      const retention = this.calculateRetention(betfairLay, bookieBack);
+      return {
+        layStake: result.layStake,
+        xr: result.xr,
+        ev: result.ev,
+        retention,
+      };
+    }
+
+    if (this.mode === "bonus-snr") {
+      const { calculateLayStakeSnr, calculateSnrEv } =
+        window.DashboardModes.bonusSnr;
+      const layStake = calculateLayStakeSnr(
+        betfairLay,
+        bookieBack,
+        backStake,
+        commissionEnabled,
+        commissionValue,
+      );
+      const snr = calculateSnrEv(
+        betfairLay,
+        bookieBack,
+        backStake,
+        commissionEnabled,
+        commissionValue,
+      );
+      const retention = this.calculateRetention(betfairLay, bookieBack);
+      return {
+        layStake,
+        xr: snr.xr,
+        ev: null, // Bonus turnover uses retention % only; EV not shown
+        retention,
+      };
+    }
+
+    const { calculateLayStakeNonPromo, calculateNonPromoLossWinPercent } =
+      window.DashboardModes.nonPromo;
+    const layStake = calculateLayStakeNonPromo(
+      betfairLay,
+      bookieBack,
+      backStake,
+      commissionEnabled,
+      commissionValue,
+    );
+    const retention = calculateNonPromoLossWinPercent(
+      betfairLay,
+      bookieBack,
+      backStake,
+      commissionEnabled,
+      commissionValue,
+    );
+
+    let xr = null;
+    if (layStake != null) {
+      const layWinAfterCommission = commissionEnabled
+        ? layStake * (1 - commissionValue)
+        : layStake;
+      xr = layWinAfterCommission - backStake;
+    }
+
+    return {
+      layStake,
+      xr,
+      ev: null,
+      retention,
+    };
+  }
+
   generateCombinations() {
     const combinations = [];
-    
-    // Group by normalized horse name
     const horseGroups = new Map();
-    this.oddsData.forEach(entry => {
-      if (!horseGroups.has(entry.normalizedName)) {
-        horseGroups.set(entry.normalizedName, {
+
+    this.oddsData.forEach((entry) => {
+      const groupKey = this.getMatchedHorseGroupKey(entry, horseGroups);
+
+      if (!horseGroups.has(groupKey)) {
+        horseGroups.set(groupKey, {
           name: entry.name,
           betfair: [],
           bookies: [],
-          tabIds: {} // Track tab IDs by site
+          tabIds: {},
         });
       }
-      
-      const group = horseGroups.get(entry.normalizedName);
+
+      const group = horseGroups.get(groupKey);
+
+      // Prefer the cleaner/shorter display name
+      if (!group.name || entry.name.length < group.name.length) {
+        group.name = entry.name;
+      }
+
       group.tabIds[entry.site] = { tabId: entry.tabId, url: entry.tabUrl };
-      
-      if (entry.site === 'Betfair') {
+
+      if (entry.site === "Betfair") {
         group.betfair.push(entry);
       } else {
         group.bookies.push(entry);
       }
     });
 
-    // Create combinations for each horse
-    horseGroups.forEach(group => {
+    const numRunners = this.oddsData.filter(
+      (entry) => entry.site === "Betfair",
+    ).length;
+
+    horseGroups.forEach((group) => {
       if (group.betfair.length > 0 && group.bookies.length > 0) {
-        // Create all Betfair x Bookie combinations
-        group.betfair.forEach(betfairEntry => {
-          group.bookies.forEach(bookieEntry => {
-            // Filter by enabled bookies
+        group.betfair.forEach((betfairEntry) => {
+          group.bookies.forEach((bookieEntry) => {
             if (this.enabledBookies.has(bookieEntry.site)) {
-              const retentionValue = this.mode === 'bonus' 
-                ? this.calculateRetention(betfairEntry.layOdds, bookieEntry.backOdds)
-                : this.calculateNonPromoLossWin(betfairEntry.layOdds, bookieEntry.backOdds);
-              
+              const layOdds = betfairEntry.layOdds;
+              const inMinRange = layOdds == null || layOdds >= this.minOdds;
+              const inMaxRange = layOdds == null || layOdds <= this.maxOdds;
+              if (!inMinRange || !inMaxRange) {
+                return;
+              }
+
+              const {
+                layStake,
+                xr,
+                ev,
+                retention: retentionValue,
+              } = this.getModeCalculations(
+                betfairEntry.layOdds,
+                bookieEntry.backOdds,
+                numRunners,
+              );
+
               combinations.push({
                 name: group.name,
                 betfairLayOdds: betfairEntry.layOdds,
                 bookieBackOdds: bookieEntry.backOdds,
                 bookieName: bookieEntry.site,
+                liquidity: betfairEntry.liquidity ?? null,
+                layStake,
+                xr,
+                ev,
                 retention: retentionValue,
-                tabIds: group.tabIds // Include tab information
+                tabIds: group.tabIds,
               });
             }
           });
         });
       } else if (group.betfair.length > 0) {
-        // Only Betfair odds available
-        group.betfair.forEach(betfairEntry => {
+        group.betfair.forEach((betfairEntry) => {
           combinations.push({
             name: group.name,
             betfairLayOdds: betfairEntry.layOdds,
             bookieBackOdds: null,
             bookieName: null,
+            liquidity: betfairEntry.liquidity ?? null,
+            layStake: null,
+            xr: null,
+            ev: null,
             retention: null,
-            tabIds: group.tabIds
+            tabIds: group.tabIds,
           });
         });
       } else if (group.bookies.length > 0) {
-        // Only bookie odds available (filter by enabled)
-        group.bookies.forEach(bookieEntry => {
+        group.bookies.forEach((bookieEntry) => {
           if (this.enabledBookies.has(bookieEntry.site)) {
             combinations.push({
               name: group.name,
               betfairLayOdds: null,
               bookieBackOdds: bookieEntry.backOdds,
               bookieName: bookieEntry.site,
+              liquidity: null,
+              layStake: null,
+              xr: null,
+              ev: null,
               retention: null,
-              tabIds: group.tabIds
+              tabIds: group.tabIds,
             });
           }
         });
@@ -586,161 +1155,122 @@ class MatchedBettingDashboard {
   }
 
   updateBookieFilters() {
-    // Get current bookies from available data
     const currentBookies = Array.from(this.availableBookies).sort();
-    
-    // Check if filters need updating
-    const existingCheckboxes = this.filterOptionsDiv.querySelectorAll('input[type="checkbox"]');
-    const existingBookies = Array.from(existingCheckboxes).map(cb => cb.value);
-    
+    const existingCheckboxes = this.filterOptionsDiv.querySelectorAll(
+      'input[type="checkbox"]',
+    );
+    const existingBookies = Array.from(existingCheckboxes).map(
+      (cb) => cb.value,
+    );
+
     if (JSON.stringify(currentBookies) !== JSON.stringify(existingBookies)) {
-      // Rebuild filter UI
-      this.filterOptionsDiv.innerHTML = '';
-      
+      this.filterOptionsDiv.innerHTML = "";
+
       if (currentBookies.length === 0) {
-        this.filterOptionsDiv.innerHTML = '<span style="color: #666; font-size: 14px;">No bookies available</span>';
-        this.toggleAllBtn.style.display = 'none';
+        this.filterOptionsDiv.innerHTML =
+          '<span style="color: #666; font-size: 14px;">No bookies available</span>';
+        this.toggleAllBtn.style.display = "none";
         return;
       }
-      
-      // Show toggle button
-      this.toggleAllBtn.style.display = 'block';
-      
-      currentBookies.forEach(bookie => {
-        // Initialize as enabled if not already tracked
+
+      this.toggleAllBtn.style.display = "block";
+
+      currentBookies.forEach((bookie) => {
         if (!this.enabledBookies.has(bookie)) {
           this.enabledBookies.add(bookie);
         }
-        
-        const wrapper = document.createElement('div');
-        wrapper.className = 'filter-checkbox';
-        
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "filter-checkbox";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
         checkbox.id = `filter-${bookie}`;
         checkbox.value = bookie;
         checkbox.checked = this.enabledBookies.has(bookie);
-        checkbox.className = 'bookie-checkbox';
-        
-        checkbox.addEventListener('change', (e) => {
+        checkbox.className = "bookie-checkbox";
+
+        checkbox.addEventListener("change", (e) => {
           if (e.target.checked) {
             this.enabledBookies.add(bookie);
           } else {
             this.enabledBookies.delete(bookie);
           }
           this.updateToggleAllButton();
-          this.renderTable(); // Re-render with new filter
+          this.renderTable();
         });
-        
-        const label = document.createElement('label');
+
+        const label = document.createElement("label");
         label.htmlFor = `filter-${bookie}`;
         label.textContent = bookie;
-        
+
         wrapper.appendChild(checkbox);
         wrapper.appendChild(label);
         this.filterOptionsDiv.appendChild(wrapper);
       });
-      
-      // Update toggle button text
+
       this.updateToggleAllButton();
     }
   }
 
   updateToggleAllButton() {
-    const checkboxes = this.filterOptionsDiv.querySelectorAll('.bookie-checkbox');
-    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
-    
-    if (checkedCount === checkboxes.length) {
-      this.toggleAllBtn.textContent = 'Unselect All';
-    } else {
-      this.toggleAllBtn.textContent = 'Select All';
-    }
+    const checkboxes =
+      this.filterOptionsDiv.querySelectorAll(".bookie-checkbox");
+    const checkedCount = Array.from(checkboxes).filter(
+      (cb) => cb.checked,
+    ).length;
+
+    this.toggleAllBtn.textContent =
+      checkboxes.length > 0 && checkedCount === checkboxes.length
+        ? "Unselect All"
+        : "Select All";
   }
 
   toggleAllBookies() {
-    const checkboxes = this.filterOptionsDiv.querySelectorAll('.bookie-checkbox');
-    const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
-    
-    // If all are checked, uncheck all. Otherwise, check all.
+    const checkboxes =
+      this.filterOptionsDiv.querySelectorAll(".bookie-checkbox");
+    const checkedCount = Array.from(checkboxes).filter(
+      (cb) => cb.checked,
+    ).length;
     const shouldCheck = checkedCount !== checkboxes.length;
-    
-    checkboxes.forEach(checkbox => {
+
+    checkboxes.forEach((checkbox) => {
       checkbox.checked = shouldCheck;
       const bookie = checkbox.value;
-      
+
       if (shouldCheck) {
         this.enabledBookies.add(bookie);
       } else {
         this.enabledBookies.delete(bookie);
       }
     });
-    
+
     this.updateToggleAllButton();
     this.renderTable();
   }
 
-  calculateRetention(betfairLay, bookieBack) {
-    if (!betfairLay || !bookieBack) {
-      return null;
-    }
-
-    if (this.commissionEnabled) {
-      // With commission: retention = (back - 1) * (1 - commission) / (lay - commission) * 100
-      const denominator = betfairLay - this.commissionValue;
-      if (denominator <= 0) return null;
-      const retention = ((bookieBack - 1) * (1 - this.commissionValue) / denominator) * 100;
-      return retention;
-    } else {
-      // Without commission: retention = (back - 1) / lay * 100
-      const retention = ((bookieBack - 1) / betfairLay) * 100;
-      return retention;
-    }
-  }
-
-  calculateNonPromoLossWin(betfairLay, bookieBack) {
-    if (!betfairLay || !bookieBack) {
-      return null;
-    }
-
-    const backStake = 100;
-    
-    // Calculate lay stake that balances both outcomes when commission is applied
-    let layStake;
-    if (this.commissionEnabled) {
-      // With commission, we need to balance:
-      // Scenario 1 (back wins): backProfit - layLiability = outcome
-      // Scenario 2 (back loses): layWinAfterCommission - backStake = outcome
-      // 
-      // backStake * (bookieBack - 1) - layStake * (betfairLay - 1) = layStake * (1 - commission) - backStake
-      // Solving for layStake:
-      // backStake * (bookieBack - 1) + backStake = layStake * (betfairLay - 1) + layStake * (1 - commission)
-      // backStake * bookieBack = layStake * (betfairLay - 1 + 1 - commission)
-      // layStake = (backStake * bookieBack) / (betfairLay - commission)
-      layStake = (backStake * bookieBack) / (betfairLay - this.commissionValue);
-    } else {
-      // Without commission
-      layStake = (backStake * bookieBack) / betfairLay;
-    }
-    
-    // Calculate outcome (should be same for both scenarios when balanced)
-    // Scenario 1: Back wins
-    const backProfit = backStake * (bookieBack - 1);
-    const layLoss = layStake * (betfairLay - 1);
-    const outcome = backProfit - layLoss;
-    
-    // Calculate loss/win percentage
-    const lossWinPercent = (outcome / backStake) * 100;
-    
-    return lossWinPercent;
-  }
-
   renderTable() {
-    this.tableBody.innerHTML = '';
+    this.tableBody.innerHTML = "";
 
-    // Update table header based on mode
-    const retentionHeader = document.getElementById('retentionHeader');
-    if (retentionHeader) {
-      retentionHeader.textContent = this.mode === 'bonus' ? 'Retention %' : '% Loss/Win';
+    const xrHeader = document.getElementById("xrHeader");
+    const layStakeHeader = document.getElementById("layStakeHeader");
+    const evHeader = document.getElementById("evHeader");
+
+    if (xrHeader) xrHeader.textContent = "Xr";
+    if (layStakeHeader) {
+      const hideLayColumn = this.hideLayStake || this.backStakeValue <= 0;
+      layStakeHeader.style.display = hideLayColumn ? "none" : "";
+    }
+
+    if (evHeader) {
+      if (this.mode === "non-promo") {
+        evHeader.textContent = "% Loss/Win";
+      } else if (this.mode === "bonus-snr") {
+        // In bonus turnover mode, show retention % just like main branch
+        evHeader.textContent = "Retention %";
+      } else {
+        evHeader.textContent = "EV";
+      }
     }
 
     if (this.oddsData.length === 0) {
@@ -748,109 +1278,180 @@ class MatchedBettingDashboard {
       return;
     }
 
-    // Generate all combinations
     const combinations = this.generateCombinations();
 
-    // Sort by retention (best opportunities first)
     const sortedCombos = combinations.sort((a, b) => {
-      // Sort: valid retentions first, then incomplete data
-      if (a.retention === null && b.retention === null) return 0;
-      if (a.retention === null) return 1;
-      if (b.retention === null) return -1;
-      
-      // In bonus mode: higher retention is better
-      // In non-promo mode: higher value is better (less loss or more profit)
-      return b.retention - a.retention;
+      if (this.mode === "bonus-snr") {
+        // Bonus turnover: sort by retention % (what we show), not EV
+        if (a.retention === null && b.retention === null) return 0;
+        if (a.retention === null) return 1;
+        if (b.retention === null) return -1;
+        return b.retention - a.retention;
+      }
+      // bonus-place and non-promo: sort by EV (non-promo has null EV, so order preserved)
+      if (a.ev === null && b.ev === null) return 0;
+      if (a.ev === null) return 1;
+      if (b.ev === null) return -1;
+      return b.ev - a.ev;
     });
 
-    // Determine if we should show collapse button
     const shouldCollapse = sortedCombos.length > this.COLLAPSE_THRESHOLD;
-    const visibleRows = shouldCollapse && this.isCollapsed 
-      ? sortedCombos.slice(0, this.COLLAPSE_THRESHOLD) 
-      : sortedCombos;
+    const visibleRows =
+      shouldCollapse && this.isCollapsed
+        ? sortedCombos.slice(0, this.COLLAPSE_THRESHOLD)
+        : sortedCombos;
 
-    visibleRows.forEach((combo, index) => {
-      const row = document.createElement('tr');
-      
-      // Add retention-based row highlighting using configurable thresholds
-      if (combo.retention !== null) {
-        const thresholds = this.mode === 'bonus' ? this.colorThresholds.bonus : this.colorThresholds.nonPromo;
-        
-        if (combo.retention >= thresholds.darkGreen) {
-          row.classList.add('retention-dark-green');
-        } else if (combo.retention >= thresholds.lightGreen) {
-          row.classList.add('retention-light-green');
-        } else if (combo.retention >= thresholds.yellow) {
-          row.classList.add('retention-yellow');
-        } else if (combo.retention >= thresholds.orange) {
-          row.classList.add('retention-orange');
+    visibleRows.forEach((combo) => {
+      const row = document.createElement("tr");
+
+      // Retention-based row highlighting (same pattern as main branch)
+      // Row highlighting:
+      // - Bonus turnover (bonus-snr): thresholds compare against retention %
+      // - Non-promo: thresholds compare against retention % (% loss/win)
+      // - Bonus back for placing (bonus-place): thresholds compare against EV
+      let thresholds = null;
+      let metric = null;
+
+      if (this.mode === "bonus-snr" && combo.retention !== null) {
+        thresholds = this.colorThresholds.bonus;
+        metric = combo.retention;
+      } else if (this.mode === "non-promo" && combo.retention !== null) {
+        thresholds = this.colorThresholds.nonPromo;
+        metric = combo.retention;
+      } else if (this.mode === "bonus-place" && combo.ev !== null) {
+        thresholds = this.colorThresholds.bonusPlace || this.colorThresholds.bonus;
+        metric = combo.ev;
+      }
+
+      if (thresholds && metric !== null) {
+        if (metric >= thresholds.darkGreen) {
+          row.classList.add("retention-dark-green");
+        } else if (metric >= thresholds.lightGreen) {
+          row.classList.add("retention-light-green");
+        } else if (metric >= thresholds.yellow) {
+          row.classList.add("retention-yellow");
+        } else if (metric >= thresholds.orange) {
+          row.classList.add("retention-orange");
         }
       }
-      
-      // Make row clickable
-      row.style.cursor = 'pointer';
-      row.title = 'Click to view on betting site';
-      row.addEventListener('click', () => this.handleRowClick(combo));
-      
-      // Horse Name
-      const nameCell = document.createElement('td');
+
+      row.style.cursor = "pointer";
+      row.title = "Click to view on betting site";
+      row.addEventListener("click", () => this.handleRowClick(combo));
+
+      const liquidityValue = this.parseCurrency(combo.liquidity);
+      const hasEnoughLiquidity =
+        liquidityValue != null &&
+        combo.layStake != null &&
+        liquidityValue > combo.layStake;
+
+      const nameCell = document.createElement("td");
       nameCell.innerHTML = `<span class="horse-name">${combo.name}</span>`;
       row.appendChild(nameCell);
 
-      // Betfair Lay Odds
-      const betfairCell = document.createElement('td');
-      if (combo.betfairLayOdds !== null) {
-        betfairCell.innerHTML = `<span class="odds-betfair">${combo.betfairLayOdds.toFixed(2)}</span>`;
+      const bookieNameCell = document.createElement("td");
+      bookieNameCell.className = "bookie-cell";
+      if (combo.bookieName) {
+        const logoHtml = this.getBookieLogoHtml(combo.bookieName);
+        bookieNameCell.innerHTML =
+          logoHtml || `<span class="bookie-label">${combo.bookieName}</span>`;
       } else {
-        betfairCell.innerHTML = '<span class="neutral">-</span>';
+        bookieNameCell.innerHTML = '<span class="neutral">-</span>';
       }
-      row.appendChild(betfairCell);
+      row.appendChild(bookieNameCell);
 
-      // Bookie Back Odds
-      const bookieCell = document.createElement('td');
-      if (combo.bookieBackOdds !== null) {
-        const bookieLabel = combo.bookieName ? ` <span class="bookie-label">(${combo.bookieName})</span>` : '';
-        bookieCell.innerHTML = `<span class="odds-bookie">${combo.bookieBackOdds.toFixed(2)}</span>${bookieLabel}`;
+      const backCell = document.createElement("td");
+      backCell.innerHTML =
+        combo.bookieBackOdds != null
+          ? `<span class="odds-bookie">${combo.bookieBackOdds.toFixed(2)}</span>`
+          : '<span class="neutral">-</span>';
+      row.appendChild(backCell);
+
+      const layCell = document.createElement("td");
+      layCell.innerHTML =
+        combo.betfairLayOdds != null
+          ? `<span class="odds-betfair">${combo.betfairLayOdds.toFixed(2)}</span>`
+          : '<span class="neutral">-</span>';
+      row.appendChild(layCell);
+
+      const liquidityCell = document.createElement("td");
+      liquidityCell.innerHTML =
+        combo.liquidity != null
+          ? `<span class="liquidity">${combo.liquidity}</span>`
+          : '<span class="neutral">-</span>';
+
+      if (hasEnoughLiquidity) {
+        liquidityCell.style.backgroundColor = "rgba(76, 175, 80, 0.28)";
+        liquidityCell.style.boxShadow =
+          "inset 0 0 0 2px rgba(76, 175, 80, 0.65)";
+        liquidityCell.style.borderRadius = "6px";
+        liquidityCell.title = "Liquidity is greater than lay amount";
+      }
+
+      row.appendChild(liquidityCell);
+
+      const layStakeCell = document.createElement("td");
+      layStakeCell.innerHTML =
+        combo.layStake != null
+          ? `<span class="stake-value">${combo.layStake.toFixed(2)}</span>`
+          : '<span class="neutral">-</span>';
+      if (this.hideLayStake || this.backStakeValue <= 0) {
+        layStakeCell.style.display = "none";
+      }
+      row.appendChild(layStakeCell);
+
+      const xrCell = document.createElement("td");
+      if (combo.xr != null) {
+        const xrClass = combo.xr >= 0 ? "positive" : "negative";
+        xrCell.innerHTML = `<span class="metric ${xrClass}">${combo.xr.toFixed(2)}</span>`;
       } else {
-        bookieCell.innerHTML = '<span class="neutral">-</span>';
+        xrCell.innerHTML = '<span class="metric neutral">-</span>';
       }
-      row.appendChild(bookieCell);
+      row.appendChild(xrCell);
 
-      // Retention % or Loss/Win %
-      const retentionCell = document.createElement('td');
-      
-      if (combo.retention !== null) {
-        // Cells always red/negative in both modes
-        const retentionClass = 'negative';
-        retentionCell.innerHTML = `<span class="retention ${retentionClass}">${combo.retention.toFixed(2)}%</span>`;
+      const evCell = document.createElement("td");
+      if (this.mode === "non-promo" || this.mode === "bonus-snr") {
+        // For non-promo and bonus turnover, show retention % in this column
+        if (combo.retention != null) {
+          const evClass = combo.retention >= 0 ? "positive" : "negative";
+          evCell.innerHTML = `<span class="metric ${evClass}">${combo.retention.toFixed(2)}%</span>`;
+        } else {
+          evCell.innerHTML = '<span class="metric neutral">-</span>';
+        }
       } else {
-        retentionCell.innerHTML = '<span class="retention neutral">-</span>';
+        // Bonus back for placing: show EV (currency)
+        if (combo.ev != null) {
+          const evClass = combo.ev >= 0 ? "positive" : "negative";
+          evCell.innerHTML = `<span class="metric ${evClass}">${combo.ev.toFixed(2)}</span>`;
+        } else {
+          evCell.innerHTML = '<span class="metric neutral">-</span>';
+        }
       }
-      row.appendChild(retentionCell);
 
+      row.appendChild(evCell);
       this.tableBody.appendChild(row);
     });
 
-    // Add collapse/expand button if needed
     if (shouldCollapse) {
-      const buttonRow = document.createElement('tr');
-      buttonRow.id = 'collapseButtonRow';
-      const buttonCell = document.createElement('td');
-      buttonCell.colSpan = 4;
-      buttonCell.style.textAlign = 'center';
-      buttonCell.style.padding = '15px';
-      
-      const button = document.createElement('button');
-      button.textContent = this.isCollapsed 
-        ? `▼ Show ${sortedCombos.length - this.COLLAPSE_THRESHOLD} more rows` 
-        : `▲ Collapse`;
-      button.style.padding = '8px 16px';
-      button.style.cursor = 'pointer';
+      const buttonRow = document.createElement("tr");
+      buttonRow.id = "collapseButtonRow";
+
+      const buttonCell = document.createElement("td");
+      buttonCell.colSpan = 8;
+      buttonCell.style.textAlign = "center";
+      buttonCell.style.padding = "15px";
+
+      const button = document.createElement("button");
+      button.textContent = this.isCollapsed
+        ? `▼ Show ${sortedCombos.length - this.COLLAPSE_THRESHOLD} more rows`
+        : "▲ Collapse";
+      button.style.padding = "8px 16px";
+      button.style.cursor = "pointer";
       button.onclick = () => {
         this.isCollapsed = !this.isCollapsed;
         this.renderTable();
       };
-      
+
       buttonCell.appendChild(button);
       buttonRow.appendChild(buttonCell);
       this.tableBody.appendChild(buttonRow);
@@ -860,7 +1461,7 @@ class MatchedBettingDashboard {
   renderEmptyState() {
     this.tableBody.innerHTML = `
       <tr>
-        <td colspan="4" class="empty-state">
+        <td colspan="8" class="empty-state">
           <div class="empty-state-icon">📊</div>
           <div class="empty-state-text">No odds data available</div>
           <div class="empty-state-hint">Open betting tabs and click refresh to load odds</div>
@@ -869,59 +1470,50 @@ class MatchedBettingDashboard {
     `;
   }
 
-  setStatus(message, type = 'info') {
+  setStatus(message, type = "info") {
+    if (!this.statusDiv) return;
     this.statusDiv.textContent = message;
-    this.statusDiv.style.backgroundColor = {
-      loading: '#2a4a6a',
-      success: '#2a4a2a',
-      warning: '#6a5a2a',
-      error: '#6a2a2a',
-      info: '#2a2a2a'
-    }[type] || '#2a2a2a';
+    this.statusDiv.style.backgroundColor =
+      {
+        loading: "#2a4a6a",
+        success: "#2a4a2a",
+        warning: "#6a5a2a",
+        error: "#6a2a2a",
+        info: "#2a2a2a",
+      }[type] || "#2a2a2a";
   }
 
   async handleRowClick(combo) {
-    console.log('[Dashboard] Row clicked:', combo);
-    
-    // Determine which tab to switch to
-    // Priority: Bookie tab (if exists) > Betfair tab
-    let targetSite = combo.bookieName || 'Betfair';
-    let targetTabInfo = combo.tabIds[targetSite];
-    
+    const targetSite = combo.bookieName || "Betfair";
+    const targetTabInfo = combo.tabIds[targetSite];
+
     if (!targetTabInfo) {
-      console.warn('[Dashboard] No tab found for site:', targetSite);
       return;
     }
-    
+
     try {
-      // Switch to the tab
       await chrome.tabs.update(targetTabInfo.tabId, { active: true });
       await chrome.windows.update(
         (await chrome.tabs.get(targetTabInfo.tabId)).windowId,
-        { focused: true }
+        { focused: true },
       );
-      
-      // Send highlight message to content script
+
       setTimeout(() => {
-        chrome.tabs.sendMessage(targetTabInfo.tabId, {
-          action: 'highlight_horse',
-          horseName: combo.name
-        }, (response) => {
-          if (chrome.runtime.lastError) {
-            console.warn('[Dashboard] Could not send highlight message:', chrome.runtime.lastError.message);
-          } else {
-            console.log('[Dashboard] Highlight message sent successfully');
-          }
-        });
-      }, 300); // Small delay to ensure tab is active
-      
+        chrome.tabs.sendMessage(
+          targetTabInfo.tabId,
+          {
+            action: "highlight_horse",
+            horseName: combo.name,
+          },
+          () => {},
+        );
+      }, 300);
     } catch (error) {
-      console.error('[Dashboard] Error switching to tab:', error);
+      console.error("[Dashboard] Error switching to tab:", error);
     }
   }
 }
 
-// Initialize dashboard when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener("DOMContentLoaded", () => {
   new MatchedBettingDashboard();
 });

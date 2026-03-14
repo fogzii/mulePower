@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Matched Betting Dashboard",
+  "name": "mulePower",
   "version": "1.0.0",
   "description": "Horse racing odds comparison dashboard for matched betting",
   "permissions": [
@@ -28,7 +28,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Open Matched Betting Dashboard"
+    "default_title": "Open mulePower"
   },
   "content_scripts": [
     {
