@@ -82,6 +82,15 @@
         justify-content: flex-end;
       }
 
+      .status-bar {
+        margin-bottom: 10px;
+        padding: 10px 16px;
+        text-align: center;
+        font-size: 14px;
+        border-radius: 6px;
+        min-height: 24px;
+      }
+
       .race-commission-row {
         display: flex;
         justify-content: space-between;
@@ -725,6 +734,8 @@
       </div>
     </div>
 
+    <div id="status" class="status-bar"></div>
+
     <div class="table-container">
       <table id="oddsTable">
         <thead>
@@ -739,17 +750,7 @@
             <th id="evHeader">EV</th>
           </tr>
         </thead>
-        <tbody id="tableBody">
-          <tr>
-            <td colspan="8" class="empty-state">
-              <div class="empty-state-icon">📊</div>
-              <div class="empty-state-text">No odds data available</div>
-              <div class="empty-state-hint">
-                Open betting tabs and click refresh to load odds
-              </div>
-            </td>
-          </tr>
-        </tbody>
+        <tbody id="tableBody"></tbody>
       </table>
     </div>
 

@@ -712,19 +712,17 @@ class MatchedBettingDashboard {
       this.updateBookieFilters();
 
       if (this.oddsData.length === 0) {
-        if (!silent) {
-          this.setStatus(
-            "⚠️ No odds data found. Make sure you have betting tabs open (Betfair, TAB, bet365, Sportsbet, Ladbrokes, Neds, PointsBet, Betr, Unibet, BetDeluxe).",
-            "warning",
-          );
-        }
+        this.setStatus(
+          "No odds data available. Make sure Betfair and at least one other bookie is open.",
+          "warning",
+        );
         this.renderEmptyState();
       } else {
         this.updateRaceInfo();
         this.updateCommissionInfo();
-        if (!silent) {
-          this.setStatus("", "info");
-        }
+        // Always clear the status bar once we have real odds data,
+        // even during silent auto-refreshes.
+        this.setStatus("", "info");
         this.renderTable();
       }
     } catch (error) {
@@ -1459,19 +1457,21 @@ class MatchedBettingDashboard {
   }
 
   renderEmptyState() {
-    this.tableBody.innerHTML = `
-      <tr>
-        <td colspan="8" class="empty-state">
-          <div class="empty-state-icon">📊</div>
-          <div class="empty-state-text">No odds data available</div>
-          <div class="empty-state-hint">Open betting tabs and click refresh to load odds</div>
-        </td>
-      </tr>
-    `;
+    // Leave the table body empty; the status bar above the table
+    // now communicates "no odds data" to the user.
+    this.tableBody.innerHTML = "";
   }
 
   setStatus(message, type = "info") {
     if (!this.statusDiv) return;
+
+    if (!message) {
+      this.statusDiv.textContent = "";
+      this.statusDiv.style.display = "none";
+      return;
+    }
+
+    this.statusDiv.style.display = "block";
     this.statusDiv.textContent = message;
     this.statusDiv.style.backgroundColor =
       {
