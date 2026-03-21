@@ -55,6 +55,7 @@ class MatchedBettingDashboard {
     this.eliteMode = false;
 
     this.raceVenue = null;
+    this.betfairTotalMatched = null;
     this.betfairCommissionDisplay = "";
 
     this.init();
@@ -638,6 +639,7 @@ class MatchedBettingDashboard {
 
     this.oddsData = [];
     this.raceVenue = null;
+    this.betfairTotalMatched = null;
     this.betfairCommissionDisplay = "";
     this.availableBookies.clear();
 
@@ -826,6 +828,14 @@ class MatchedBettingDashboard {
       }
 
       if (
+        !this.betfairTotalMatched &&
+        horse.site === "Betfair" &&
+        horse.totalMatched
+      ) {
+        this.betfairTotalMatched = horse.totalMatched;
+      }
+
+      if (
         !this.betfairCommissionDisplay &&
         horse.site === "Betfair" &&
         horse.commissionDisplay
@@ -864,11 +874,10 @@ class MatchedBettingDashboard {
     const el = document.getElementById("raceInfo");
     if (!el) return;
 
-    if (this.raceVenue) {
-      el.textContent = this.raceVenue;
-    } else {
-      el.textContent = "";
-    }
+    const parts = [];
+    if (this.raceVenue) parts.push(this.raceVenue);
+    if (this.betfairTotalMatched) parts.push(this.betfairTotalMatched);
+    el.textContent = parts.join(" | ");
   }
 
   updateCommissionInfo() {
@@ -1083,9 +1092,11 @@ class MatchedBettingDashboard {
         group.betfair.forEach((betfairEntry) => {
           group.bookies.forEach((bookieEntry) => {
             if (this.enabledBookies.has(bookieEntry.site)) {
-              const layOdds = betfairEntry.layOdds;
-              const inMinRange = layOdds == null || layOdds >= this.minOdds;
-              const inMaxRange = layOdds == null || layOdds <= this.maxOdds;
+              const backOdds = bookieEntry.backOdds;
+              const inMinRange =
+                backOdds == null || backOdds >= this.minOdds;
+              const inMaxRange =
+                backOdds == null || backOdds <= this.maxOdds;
               if (!inMinRange || !inMaxRange) {
                 return;
               }

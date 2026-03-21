@@ -143,6 +143,18 @@ function scrapeOdds() {
           console.warn('[Betfair Scraper] Unable to extract venue name:', e);
         }
 
+        // Total matched on the market (e.g. <span class="total-matched">AUD 45,009</span>)
+        let totalMatched = null;
+        try {
+          const matchedEl = document.querySelector('span.total-matched');
+          if (matchedEl) {
+            const text = matchedEl.textContent.trim();
+            totalMatched = text || null;
+          }
+        } catch (e) {
+          console.warn('[Betfair Scraper] Unable to extract total matched:', e);
+        }
+
         // Find all runner rows
         const runnerRows = document.querySelectorAll('tr.runner-line');
 
@@ -201,6 +213,7 @@ function scrapeOdds() {
               liquidity: liquidity,
               site: 'Betfair',
               raceVenue: raceVenue,
+              totalMatched: totalMatched,
               commissionRate: commissionRate,
               commissionDisplay: commissionDisplay
             });
