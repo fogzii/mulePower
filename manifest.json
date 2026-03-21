@@ -22,7 +22,8 @@
     "*://*.betr.com.au/*",
     "*://*.unibet.com.au/*",
     "*://*.unibet.com/*",
-    "*://*.betdeluxe.com.au/*"
+    "*://*.betdeluxe.com.au/*",
+    "*://*.noisy.com.au/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -79,6 +80,11 @@
     {
       "matches": ["*://*.betdeluxe.com.au/*"],
       "js": ["bookies/betdeluxe.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.noisy.com.au/*"],
+      "js": ["bookies/noisy.js"],
       "run_at": "document_idle"
     }
   ]

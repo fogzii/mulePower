@@ -27,6 +27,7 @@
       "Betr",
       "Unibet",
       "BetDeluxe",
+      "Noisy",
     ];
 
     this.oddsData = [];

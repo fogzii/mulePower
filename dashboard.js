@@ -605,6 +605,7 @@ class MatchedBettingDashboard {
       Betr: "betr.png",
       Unibet: "unibet.png",
       BetDeluxe: "betdeluxe.png",
+      Noisy: "noisy.png",
     };
 
     const fileName = logoFiles[bookieName];
@@ -626,6 +627,7 @@ class MatchedBettingDashboard {
     if (url.includes("betr.com.au")) return "bookies/betr.js";
     if (url.includes("unibet.com")) return "bookies/unibet.js";
     if (url.includes("betdeluxe.com.au")) return "bookies/betdeluxe.js";
+    if (url.includes("noisy.com.au")) return "bookies/noisy.js";
     return null;
   }
 
@@ -1286,7 +1288,14 @@ class MatchedBettingDashboard {
         if (b.retention === null) return -1;
         return b.retention - a.retention;
       }
-      // bonus-place and non-promo: sort by EV (non-promo has null EV, so order preserved)
+      if (this.mode === "non-promo") {
+        // Non-promo: EV is always null; % Loss/Win lives in retention — sort by that (best first)
+        if (a.retention === null && b.retention === null) return 0;
+        if (a.retention === null) return 1;
+        if (b.retention === null) return -1;
+        return b.retention - a.retention;
+      }
+      // bonus-place: sort by EV
       if (a.ev === null && b.ev === null) return 0;
       if (a.ev === null) return 1;
       if (b.ev === null) return -1;
