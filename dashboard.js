@@ -12,6 +12,8 @@ class MatchedBettingDashboard {
     this.COLLAPSE_THRESHOLD = 10;
     this.enabledBookies = new Set();
     this.availableBookies = new Set();
+    /** Snapshot of bookie names from last filter update — used to default-on only truly new bookies */
+    this._lastKnownAvailableBookies = new Set();
 
     this.commissionValue = 0.08;
     this.commissionEnabled = true;
@@ -1167,6 +1169,14 @@ class MatchedBettingDashboard {
 
   updateBookieFilters() {
     const currentBookies = Array.from(this.availableBookies).sort();
+
+    // Drop enabled entries for bookies that are no longer in the data
+    for (const b of [...this.enabledBookies]) {
+      if (!this.availableBookies.has(b)) {
+        this.enabledBookies.delete(b);
+      }
+    }
+
     const existingCheckboxes = this.filterOptionsDiv.querySelectorAll(
       'input[type="checkbox"]',
     );
@@ -1175,19 +1185,27 @@ class MatchedBettingDashboard {
     );
 
     if (JSON.stringify(currentBookies) !== JSON.stringify(existingBookies)) {
+      const previouslyAvailable = new Set(this._lastKnownAvailableBookies);
+
       this.filterOptionsDiv.innerHTML = "";
 
       if (currentBookies.length === 0) {
         this.filterOptionsDiv.innerHTML =
           '<span style="color: #666; font-size: 14px;">No bookies available</span>';
         this.toggleAllBtn.style.display = "none";
+        this._lastKnownAvailableBookies = new Set();
         return;
       }
 
       this.toggleAllBtn.style.display = "block";
 
       currentBookies.forEach((bookie) => {
-        if (!this.enabledBookies.has(bookie)) {
+        // Only auto-enable bookies that were not in the previous snapshot (new tab / new site).
+        // If the user had unchecked a bookie that is still available, do not re-add it.
+        if (
+          !this.enabledBookies.has(bookie) &&
+          !previouslyAvailable.has(bookie)
+        ) {
           this.enabledBookies.add(bookie);
         }
 
@@ -1221,6 +1239,9 @@ class MatchedBettingDashboard {
       });
 
       this.updateToggleAllButton();
+      this._lastKnownAvailableBookies = new Set(currentBookies);
+    } else {
+      this._lastKnownAvailableBookies = new Set(currentBookies);
     }
   }
 
