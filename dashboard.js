@@ -14,6 +14,12 @@ class MatchedBettingDashboard {
     this.availableBookies = new Set();
     /** Snapshot of bookie names from last filter update — used to default-on only truly new bookies */
     this._lastKnownAvailableBookies = new Set();
+    /**
+     * Per-mode bookie filter memory.
+     * Stores a Set of enabled bookie names for each mode the user has visited.
+     * Undefined for a mode means the user has never interacted with it → default to all enabled.
+     */
+    this.modeBookieFilters = {};
 
     this.commissionValue = 0.08;
     this.commissionEnabled = true;
@@ -57,6 +63,7 @@ class MatchedBettingDashboard {
     this.eliteMode = false;
 
     this.raceVenue = null;
+    this.raceNumber = null;
     this.betfairTotalMatched = null;
     this.betfairCommissionDisplay = "";
 
@@ -393,10 +400,36 @@ class MatchedBettingDashboard {
   }
 
   onModeChange() {
+    // Persist the current mode's bookie selection before switching.
+    this.modeBookieFilters[this.mode] = new Set(this.enabledBookies);
+
     this.mode = this.modeSelect.value;
+
+    // Restore the saved filter for the incoming mode, or default to all bookies.
+    // Do not intersect with availableBookies here: fetchOdds can clear/rebuild that set
+    // mid-refresh; updateBookieFilters() prunes bookies that are no longer open.
+    if (this.modeBookieFilters[this.mode] !== undefined) {
+      this.enabledBookies = new Set(this.modeBookieFilters[this.mode]);
+    } else {
+      // First time visiting this mode — enable every available bookie.
+      this.enabledBookies = new Set(this.availableBookies);
+    }
+
+    this._syncCheckboxesToEnabledBookies();
+
     chrome.storage.local.set({ bettingMode: this.mode }).catch(() => {});
     this.updatePlacesPaidVisibility();
     this.renderTable();
+  }
+
+  /** Sync checkbox UI state to match the current enabledBookies set. */
+  _syncCheckboxesToEnabledBookies() {
+    const checkboxes =
+      this.filterOptionsDiv.querySelectorAll(".bookie-checkbox");
+    checkboxes.forEach((cb) => {
+      cb.checked = this.enabledBookies.has(cb.value);
+    });
+    this.updateToggleAllButton();
   }
 
   updatePlacesPaidVisibility() {
@@ -641,9 +674,9 @@ class MatchedBettingDashboard {
 
     this.oddsData = [];
     this.raceVenue = null;
+    this.raceNumber = null;
     this.betfairTotalMatched = null;
     this.betfairCommissionDisplay = "";
-    this.availableBookies.clear();
 
     try {
       const tabs = await chrome.tabs.query({});
@@ -715,6 +748,7 @@ class MatchedBettingDashboard {
         });
       }
 
+      this._rebuildAvailableBookiesFromOddsData();
       this.updateBookieFilters();
 
       if (this.oddsData.length === 0) {
@@ -823,10 +857,25 @@ class MatchedBettingDashboard {
     });
   }
 
+  /** Derive non-Betfair bookie names from merged odds (single source of truth each refresh). */
+  _rebuildAvailableBookiesFromOddsData() {
+    const next = new Set();
+    for (const entry of this.oddsData) {
+      if (entry.site !== "Betfair") {
+        next.add(entry.site);
+      }
+    }
+    this.availableBookies = next;
+  }
+
   mergeOddsData(data, tabInfo) {
     data.forEach((horse) => {
       if (!this.raceVenue && horse.site === "Betfair" && horse.raceVenue) {
         this.raceVenue = horse.raceVenue;
+      }
+
+      if (!this.raceNumber && horse.site === "Betfair" && horse.raceNumber) {
+        this.raceNumber = horse.raceNumber;
       }
 
       if (
@@ -865,10 +914,6 @@ class MatchedBettingDashboard {
         tabId: tabInfo.tabId,
         tabUrl: tabInfo.url,
       });
-
-      if (horse.site !== "Betfair") {
-        this.availableBookies.add(horse.site);
-      }
     });
   }
 
@@ -877,7 +922,14 @@ class MatchedBettingDashboard {
     if (!el) return;
 
     const parts = [];
-    if (this.raceVenue) parts.push(this.raceVenue);
+    if (this.raceVenue) {
+      // Insert the race number (e.g. "R5") before the country code in parentheses.
+      // "16:17 Dalby (AUS)" → "16:17 Dalby R5 (AUS)"
+      const venue = this.raceNumber
+        ? this.raceVenue.replace(/(\s*\([A-Z]+\)\s*)$/, ` ${this.raceNumber}$1`)
+        : this.raceVenue;
+      parts.push(venue);
+    }
     if (this.betfairTotalMatched) parts.push(this.betfairTotalMatched);
     el.textContent = parts.join(" | ");
   }
@@ -1095,10 +1147,8 @@ class MatchedBettingDashboard {
           group.bookies.forEach((bookieEntry) => {
             if (this.enabledBookies.has(bookieEntry.site)) {
               const backOdds = bookieEntry.backOdds;
-              const inMinRange =
-                backOdds == null || backOdds >= this.minOdds;
-              const inMaxRange =
-                backOdds == null || backOdds <= this.maxOdds;
+              const inMinRange = backOdds == null || backOdds >= this.minOdds;
+              const inMaxRange = backOdds == null || backOdds <= this.maxOdds;
               if (!inMinRange || !inMaxRange) {
                 return;
               }
@@ -1225,6 +1275,8 @@ class MatchedBettingDashboard {
           } else {
             this.enabledBookies.delete(bookie);
           }
+          // Persist the updated selection for this mode.
+          this.modeBookieFilters[this.mode] = new Set(this.enabledBookies);
           this.updateToggleAllButton();
           this.renderTable();
         });
@@ -1276,6 +1328,9 @@ class MatchedBettingDashboard {
         this.enabledBookies.delete(bookie);
       }
     });
+
+    // Persist the updated selection for this mode.
+    this.modeBookieFilters[this.mode] = new Set(this.enabledBookies);
 
     this.updateToggleAllButton();
     this.renderTable();
@@ -1358,7 +1413,8 @@ class MatchedBettingDashboard {
         thresholds = this.colorThresholds.nonPromo;
         metric = combo.retention;
       } else if (this.mode === "bonus-place" && combo.ev !== null) {
-        thresholds = this.colorThresholds.bonusPlace || this.colorThresholds.bonus;
+        thresholds =
+          this.colorThresholds.bonusPlace || this.colorThresholds.bonus;
         metric = combo.ev;
       }
 
